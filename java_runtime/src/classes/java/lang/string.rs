@@ -205,10 +205,13 @@ impl String {
         Ok(())
     }
 
-    async fn equals(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Self>, other: ClassInstanceRef<Self>) -> Result<bool> {
+    async fn equals(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Self>, other: ClassInstanceRef<Object>) -> Result<bool> {
         tracing::debug!("java.lang.String::equals({this:?}, {other:?})");
 
-        if other.is_null() {
+        // `String.equals(Object)` returns false for anything that is not a
+        // String, rather than failing to coerce it - a Vector of char arrays
+        // searched with `indexOf` compares its String needle against each.
+        if other.is_null() || !jvm.is_instance(&**other, "java/lang/String") {
             return Ok(false);
         }
 
