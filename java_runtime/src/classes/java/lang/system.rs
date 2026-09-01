@@ -113,6 +113,14 @@ impl System {
     ) -> Result<()> {
         tracing::debug!("java.lang.System::arraycopy({src:?}, {src_pos}, {dest:?}, {dest_pos}, {length})");
 
+        // A null source or destination is a NullPointerException in Java, which
+        // callers may catch; loading or storing through the null reference below
+        // would instead unwrap `None` and panic the host runtime. Throw the
+        // exception the caller expects.
+        if src.is_null() || dest.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "src or dest is null").await);
+        }
+
         // TODO i think we can make it faster
         let src: Vec<JavaValue> = jvm.load_array(&src, src_pos as _, length as _).await?;
         jvm.store_array(&mut dest, dest_pos as _, src).await?;
