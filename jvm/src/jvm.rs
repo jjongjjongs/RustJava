@@ -23,7 +23,7 @@ use crate::{
     },
     error::JavaError,
     field::Field,
-    garbage_collector::determine_garbage,
+    garbage_collector::{determine_garbage, reachable_identities},
     invoke_arg::InvokeArg,
     method::Method,
     monitor::{Monitor, MonitorWait, MonitorWaitTimeout},
@@ -780,6 +780,18 @@ impl Jvm {
         }
 
         Ok(garbage_count)
+    }
+
+    /// Object identities reachable from the JVM's own GC roots, without
+    /// destroying anything. An embedder tracking a separate object graph (e.g.
+    /// a guest heap) can use this to pin objects the JVM still holds and avoid
+    /// reclaiming them out from under the JVM.
+    pub fn gc_reachable_identities(&self) -> Vec<usize> {
+        let threads = self.inner.threads.read();
+        let classes = self.inner.classes.read();
+        let interned_strings = self.interned_strings();
+
+        reachable_identities(self, &threads, &classes, &interned_strings)
     }
 
     pub(crate) async fn register_class_internal(&self, class: Class, class_loader_wrapper: Option<&dyn ClassLoaderWrapper>) -> Result<()> {

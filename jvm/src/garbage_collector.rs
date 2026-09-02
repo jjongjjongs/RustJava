@@ -12,6 +12,35 @@ pub fn determine_garbage(
     classes: &BTreeMap<String, Class>,
     interned_strings: &[Box<dyn ClassInstance>],
 ) -> Vec<Box<dyn ClassInstance>> {
+    let reachable_objects = compute_reachable_objects(jvm, threads, classes, interned_strings);
+
+    all_class_instances.difference(&reachable_objects).cloned().collect()
+}
+
+/// The set of object identities reachable from the JVM's own GC roots (static
+/// fields, live thread stack frames, `Thread` objects, and interned strings).
+///
+/// This exposes reachability without destroying anything, so an embedder that
+/// tracks a separate (e.g. guest-side) object graph can pin objects the JVM
+/// still holds and only reclaim ones dead in *both* graphs. Identities are the
+/// same values [`ClassInstance::identity`] returns.
+pub fn reachable_identities(
+    jvm: &Jvm,
+    threads: &BTreeMap<u64, JvmThread>,
+    classes: &BTreeMap<String, Class>,
+    interned_strings: &[Box<dyn ClassInstance>],
+) -> Vec<usize> {
+    let reachable_objects = compute_reachable_objects(jvm, threads, classes, interned_strings);
+
+    reachable_objects.iter().map(|x| x.identity()).collect()
+}
+
+fn compute_reachable_objects(
+    jvm: &Jvm,
+    threads: &BTreeMap<u64, JvmThread>,
+    classes: &BTreeMap<String, Class>,
+    interned_strings: &[Box<dyn ClassInstance>],
+) -> HashSet<Box<dyn ClassInstance>> {
     let mut reachable_objects = HashSet::new();
 
     classes.values().for_each(|x| {
@@ -34,7 +63,7 @@ pub fn determine_garbage(
         find_reachable_objects(jvm, x, &mut reachable_objects);
     });
 
-    all_class_instances.difference(&reachable_objects).cloned().collect()
+    reachable_objects
 }
 
 fn find_static_reachable_objects(jvm: &Jvm, class: &Class, reachable_objects: &mut HashSet<Box<dyn ClassInstance>>) {
