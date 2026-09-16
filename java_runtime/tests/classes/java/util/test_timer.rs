@@ -99,3 +99,34 @@ async fn test_timer_periodic() -> Result<()> {
 
     Ok(())
 }
+
+/// `schedule(task, delay)` runs the task once and does not run it again.
+#[tokio::test]
+async fn test_timer_one_shot() -> Result<()> {
+    let runtime = TestRuntime::new(BTreeMap::new());
+    let jvm = create_test_jvm(runtime.clone()).await?;
+
+    let class = Box::new(ClassDefinitionImpl::from_class_proto(
+        TestClass::as_proto(),
+        Box::new(runtime.clone()) as Box<_>,
+    ));
+    jvm.register_class(class, None).await?;
+
+    let test_class = jvm.new_class("TestClass", "()V", ()).await?;
+
+    let timer = jvm.new_class("java/util/Timer", "()V", ()).await?;
+    let _: () = jvm
+        .invoke_virtual(&timer, "schedule", "(Ljava/util/TimerTask;J)V", (test_class.clone(), 0i64))
+        .await?;
+
+    let _: () = jvm.invoke_static("java/lang/Thread", "sleep", "(J)V", (500i64,)).await?;
+    let run_count: i32 = jvm.get_field(&test_class, "runCount", "I").await?;
+    assert_eq!(run_count, 1, "a one-shot runs once");
+
+    // Long enough for a periodic task of any period to have run again.
+    let _: () = jvm.invoke_static("java/lang/Thread", "sleep", "(J)V", (500i64,)).await?;
+    let run_count: i32 = jvm.get_field(&test_class, "runCount", "I").await?;
+    assert_eq!(run_count, 1, "and is not queued again");
+
+    Ok(())
+}

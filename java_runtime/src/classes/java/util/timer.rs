@@ -19,6 +19,7 @@ impl Timer {
             interfaces: vec![],
             methods: vec![
                 JavaMethodProto::new("<init>", "()V", Self::init, Default::default()),
+                JavaMethodProto::new("schedule", "(Ljava/util/TimerTask;J)V", Self::schedule_once, Default::default()),
                 JavaMethodProto::new("schedule", "(Ljava/util/TimerTask;JJ)V", Self::schedule, Default::default()),
                 JavaMethodProto::new(
                     "scheduleAtFixedRate",
@@ -51,6 +52,28 @@ impl Timer {
         let _: () = jvm.invoke_virtual(&timer_thread, "start", "()V", ()).await?;
 
         Ok(())
+    }
+
+    /// `schedule(task, delay)` - run once, `delay` from now, and never again.
+    ///
+    /// A period of zero is what says "never again" here: the timer thread
+    /// requeues a task only while its period is positive, so one-shots fall out
+    /// of the queue after their single run. 소울카드마스터2 schedules its startup
+    /// this way and got no such method at all, which ended the run under
+    /// `Game.startApp` before it drew anything.
+    async fn schedule_once(
+        jvm: &Jvm,
+        context: &mut RuntimeContext,
+        this: ClassInstanceRef<Self>,
+        task: ClassInstanceRef<TimerTask>,
+        delay: i64,
+    ) -> Result<()> {
+        tracing::debug!("java.util.Timer::schedule({this:?}, {task:?}, {delay:?})");
+
+        let now: i64 = context.now() as i64;
+        let next_execution_time = now + delay;
+
+        Self::do_schedule(jvm, this, task, next_execution_time, 0).await
     }
 
     async fn schedule(
