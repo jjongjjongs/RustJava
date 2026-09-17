@@ -106,6 +106,10 @@ impl String {
     async fn init_with_byte_array(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Self>, value: ClassInstanceRef<Array<i8>>) -> Result<()> {
         tracing::debug!("java.lang.String::<init>({this:?}, {value:?})");
 
+        if value.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "bytes").await);
+        }
+
         let count = jvm.array_length(&value).await? as i32;
 
         let _: () = jvm
@@ -122,6 +126,10 @@ impl String {
         value: ClassInstanceRef<Array<u16>>,
     ) -> Result<()> {
         tracing::debug!("java.lang.String::<init>({this:?}, {value:?})");
+
+        if value.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "value").await);
+        }
 
         let count = jvm.array_length(&value).await? as i32;
 
@@ -141,6 +149,10 @@ impl String {
         count: i32,
     ) -> Result<()> {
         tracing::debug!("java.lang.String::<init>({this:?}, {value:?}, {offset}, {count})");
+
+        if value.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "value").await);
+        }
 
         let _: () = jvm.invoke_special(&this, "java/lang/Object", "<init>", "()V", ()).await?;
 
@@ -163,6 +175,10 @@ impl String {
     ) -> Result<()> {
         tracing::debug!("java.lang.String::<init>({this:?}, {value:?}, {offset}, {count})");
 
+        if value.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "bytes").await);
+        }
+
         let bytes: Vec<i8> = jvm.load_array(&value, offset as _, count as _).await?;
 
         let charset = System::get_charset(jvm).await?;
@@ -181,6 +197,10 @@ impl String {
     async fn init_with_string(jvm: &Jvm, _: &mut RuntimeContext, this: ClassInstanceRef<Self>, value: ClassInstanceRef<Self>) -> Result<()> {
         tracing::debug!("java.lang.String::<init>({this:?}, {value:?})");
 
+        if value.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "original").await);
+        }
+
         let chars: ClassInstanceRef<Array<JavaChar>> = jvm.invoke_virtual(&value, "toCharArray", "()[C", ()).await?;
 
         let _: () = jvm.invoke_special(&this, "java/lang/String", "<init>", "([C)V", (chars,)).await?;
@@ -195,6 +215,10 @@ impl String {
         value: ClassInstanceRef<StringBuffer>,
     ) -> Result<()> {
         tracing::debug!("java.lang.String::<init>({this:?}, {value:?})");
+
+        if value.is_null() {
+            return Err(jvm.exception("java/lang/NullPointerException", "buffer").await);
+        }
 
         let string: ClassInstanceRef<Self> = jvm.invoke_virtual(&value, "toString", "()Ljava/lang/String;", ()).await?;
 

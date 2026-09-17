@@ -486,3 +486,40 @@ async fn test_trim_uses_java_control_character_boundary() -> Result<()> {
 
     Ok(())
 }
+
+/// A constructor handed null says so the way Java does, rather than taking the
+/// process down with it.
+///
+/// `ClassInstanceRef` dereferences through an `unwrap`, so every one of these
+/// used to reach `array_length` or `invoke_virtual` on a `None` and panic. A
+/// title that catches the exception it was owed instead lost the whole VM:
+/// 생존일기 asks for a script file that is not in its jar, throws
+/// NullPointerException itself, catches it, and builds a String from a null in
+/// the handler.
+#[tokio::test]
+async fn test_constructors_reject_null() -> Result<()> {
+    let jvm = test_jvm().await?;
+
+    let cases: [(&str, Vec<jvm::JavaValue>); 6] = [
+        ("([B)V", vec![None.into()]),
+        ("([C)V", vec![None.into()]),
+        ("([BII)V", vec![None.into(), 0i32.into(), 0i32.into()]),
+        ("([CII)V", vec![None.into(), 0i32.into(), 0i32.into()]),
+        ("(Ljava/lang/String;)V", vec![None.into()]),
+        ("(Ljava/lang/StringBuffer;)V", vec![None.into()]),
+    ];
+
+    for (descriptor, arguments) in cases {
+        let result = jvm.new_class("java/lang/String", descriptor, arguments).await;
+
+        let Err(JavaError::JavaException(exception)) = result else {
+            panic!("new String{descriptor} with null must throw");
+        };
+        assert!(
+            jvm.is_instance(&*exception, "java/lang/NullPointerException"),
+            "new String{descriptor} with null must throw NullPointerException"
+        );
+    }
+
+    Ok(())
+}
