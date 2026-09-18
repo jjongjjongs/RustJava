@@ -232,3 +232,53 @@ async fn test_reader_default_contract_and_lifecycle() -> Result<()> {
 
     Ok(())
 }
+
+/// A line of Korean read through the reader has to come back whole.
+///
+/// The reader decodes with a decoder of its own on every call, so a byte the
+/// buffer ends in the middle of has to be held back rather than handed over:
+/// the decoder would count it as read, keep it for a next time that never
+/// comes, and the line would come back a byte short - every following
+/// character in it read a byte late.
+#[tokio::test]
+async fn test_input_stream_reader_keeps_every_euc_kr_byte_across_buffers() -> Result<()> {
+    let jvm = test_jvm().await?;
+
+    // 한글 repeated, which is two bytes a character in EUC-KR and so puts a
+    // character across every buffer the reader fills.
+    const EUC_KR: [u8; 24] = [
+        0xc7, 0xd1, 0xb1, 0xdb, 0xc7, 0xd1, 0xb1, 0xdb, 0xc7, 0xd1, 0xb1, 0xdb, 0xc7, 0xd1, 0xb1, 0xdb, 0xc7, 0xd1, 0xb1, 0xdb, 0xc7, 0xd1, 0xb1,
+        0xdb,
+    ];
+    let expected = "한글한글한글한글한글한글";
+
+    let mut bytes = jvm.instantiate_array("B", EUC_KR.len()).await?;
+    jvm.store_array(&mut bytes, 0, EUC_KR.iter().map(|byte| *byte as i8)).await?;
+    let input = jvm.new_class("java/io/ByteArrayInputStream", "([B)V", (bytes,)).await?;
+    let charset = JavaLangString::from_rust_string(&jvm, "EUC-KR").await?;
+    let reader = jvm
+        .new_class(
+            "java/io/InputStreamReader",
+            "(Ljava/io/InputStream;Ljava/lang/String;)V",
+            (input, charset),
+        )
+        .await?;
+
+    let chars = jvm.instantiate_array("C", 32).await?;
+    let mut read_so_far = 0;
+    loop {
+        let read: i32 = jvm
+            .invoke_virtual(&reader, "read", "([CII)I", (chars.clone(), read_so_far, 32 - read_so_far))
+            .await?;
+        if read == -1 {
+            break;
+        }
+        read_so_far += read;
+    }
+
+    assert_eq!(read_so_far as usize, expected.chars().count());
+    let decoded: Vec<JavaChar> = jvm.load_array(&chars, 0, read_so_far as _).await?;
+    assert_eq!(alloc::string::String::from_utf16(&decoded).unwrap(), expected);
+
+    Ok(())
+}
