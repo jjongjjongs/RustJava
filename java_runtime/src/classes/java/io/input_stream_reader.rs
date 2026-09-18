@@ -182,8 +182,8 @@ impl InputStreamReader {
                 if decode_length - lead_index < expected_length {
                     decode_length = lead_index;
                 }
-            } else if !end_of_input && charset == "EUC-KR" && read_buf_data.last().is_some_and(|value| *value >= 0x81) {
-                decode_length -= 1;
+            } else if !end_of_input && charset == "EUC-KR" {
+                decode_length = euc_kr_complete_prefix(&read_buf_data);
             }
 
             let mut decoded = vec![0; BUF_SIZE * 3];
@@ -265,4 +265,31 @@ impl InputStreamReader {
         let available: i32 = jvm.invoke_virtual(&r#in, "available", "()I", ()).await?;
         Ok(available > 0)
     }
+}
+
+/// How much of `bytes` is whole EUC-KR characters.
+///
+/// A byte the buffer ends in the middle of has to be held back until the rest
+/// of it arrives, because each call decodes with a decoder of its own and
+/// whatever that decoder keeps for next time is thrown away with it - a lead
+/// byte handed to it would be counted as read and then never decoded, which
+/// takes one byte out of the text and leaves the rest of the line reading a
+/// byte late.
+///
+/// EUC-KR cannot be scanned backwards for that byte the way UTF-8 can: a trail
+/// byte is drawn from the same range as a lead byte, so only a walk from the
+/// front says which is which.
+fn euc_kr_complete_prefix(bytes: &[u8]) -> usize {
+    let mut at = 0;
+
+    while at < bytes.len() {
+        let width = if bytes[at] >= 0x81 { 2 } else { 1 };
+        if at + width > bytes.len() {
+            break;
+        }
+
+        at += width;
+    }
+
+    at
 }
