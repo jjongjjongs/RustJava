@@ -113,12 +113,29 @@ impl RandomAccessFile {
         let fd = jvm.get_field(&this, "fd", "Ljava/io/FileDescriptor;").await?;
         let mut rust_file = FileDescriptor::file(jvm, context, fd).await?;
 
+        // Asking for nothing reads nothing, and is not the end of the file.
+        if length == 0 {
+            return Ok(0);
+        }
+
         let mut rust_buf = vec![0; length as usize];
         let Ok(read) = rust_file.read(&mut rust_buf).await else {
             return Err(jvm.exception("java/io/IOException", "I/O error").await);
         };
 
-        jvm.array_raw_buffer_mut(&mut buf).await?.write(offset as _, &rust_buf)?;
+        // The end of the file is -1, the way `FileInputStream.read` already
+        // reports it. Handing back the zero the reader gave leaves a caller
+        // that loops until -1 looping for ever, which is what a WIPI title
+        // streaming a resource does: it asked for the same 5904 bytes at the
+        // same offset nine thousand times in one capture and never moved.
+        if read == 0 {
+            return Ok(-1);
+        }
+
+        // Only what was read. The rest of `rust_buf` is the zeroes it was
+        // allocated with, and writing those would wipe whatever the caller
+        // already had in the rest of the range it offered.
+        jvm.array_raw_buffer_mut(&mut buf).await?.write(offset as _, &rust_buf[..read])?;
 
         Ok(read as i32)
     }
