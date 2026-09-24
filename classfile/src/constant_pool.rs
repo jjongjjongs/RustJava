@@ -10,7 +10,65 @@ use nom::{
 
 fn parse_utf8(data: &[u8]) -> IResult<&[u8], Arc<String>> {
     let (data, length) = be_u16(data)?;
-    map_res(take(length as usize), |utf8: &[u8]| String::from_utf8(utf8.to_vec()).map(Arc::new)).parse(data)
+    map_res(take(length as usize), |utf8: &[u8]| decode_modified_utf8(utf8).map(Arc::new).ok_or(())).parse(data)
+}
+
+/// Decode a `CONSTANT_Utf8` byte run.
+///
+/// These are Java's *modified* UTF-8, not standard UTF-8: the NUL character is
+/// the two bytes `0xC0 0x80` so no `0x00` byte appears in the run, and a
+/// character outside the Basic Multilingual Plane is written as its two UTF-16
+/// surrogates, each in the three-byte form. `String::from_utf8` rejects both,
+/// so a class carrying an embedded NUL in a string constant failed to load.
+fn decode_modified_utf8(bytes: &[u8]) -> Option<String> {
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        let b0 = bytes[i];
+        if b0 & 0x80 == 0 {
+            // 1-byte: 0xxxxxxx (0x00 does not occur in the modified form).
+            out.push(b0 as char);
+            i += 1;
+        } else if b0 & 0xE0 == 0xC0 {
+            // 2-byte: 110xxxxx 10xxxxxx.
+            let b1 = *bytes.get(i + 1)?;
+            if b1 & 0xC0 != 0x80 {
+                return None;
+            }
+            let code = (((b0 & 0x1F) as u32) << 6) | ((b1 & 0x3F) as u32);
+            out.push(char::from_u32(code)?);
+            i += 2;
+        } else if b0 & 0xF0 == 0xE0 {
+            // 3-byte: 1110xxxx 10xxxxxx 10xxxxxx.
+            let b1 = *bytes.get(i + 1)?;
+            let b2 = *bytes.get(i + 2)?;
+            if b1 & 0xC0 != 0x80 || b2 & 0xC0 != 0x80 {
+                return None;
+            }
+            let unit = (((b0 & 0x0F) as u32) << 12) | (((b1 & 0x3F) as u32) << 6) | ((b2 & 0x3F) as u32);
+            if (0xD800..=0xDBFF).contains(&unit) {
+                // High surrogate: a supplementary character is the pair, each
+                // surrogate in its own three-byte form.
+                let (b3, b4, b5) = (*bytes.get(i + 3)?, *bytes.get(i + 4)?, *bytes.get(i + 5)?);
+                if b3 & 0xF0 != 0xE0 || b4 & 0xC0 != 0x80 || b5 & 0xC0 != 0x80 {
+                    return None;
+                }
+                let low = (((b3 & 0x0F) as u32) << 12) | (((b4 & 0x3F) as u32) << 6) | ((b5 & 0x3F) as u32);
+                if !(0xDC00..=0xDFFF).contains(&low) {
+                    return None;
+                }
+                let code = 0x10000 + ((unit - 0xD800) << 10) + (low - 0xDC00);
+                out.push(char::from_u32(code)?);
+                i += 6;
+            } else {
+                out.push(char::from_u32(unit)?);
+                i += 3;
+            }
+        } else {
+            return None;
+        }
+    }
+    Some(out)
 }
 
 #[derive(Debug)]
@@ -299,5 +357,27 @@ mod tests {
     #[test]
     fn long_must_fit_in_two_constant_pool_slots() {
         assert!(ConstantPoolItem::parse_all(&[0x00, 0x02, 0x05, 0, 0, 0, 0, 0, 0, 0, 0]).is_err());
+    }
+
+    #[test]
+    fn utf8_decodes_the_modified_form() {
+        use super::decode_modified_utf8;
+
+        // A NUL is 0xC0 0x80, which standard UTF-8 rejects as overlong.
+        assert!(alloc::string::String::from_utf8(alloc::vec![0xC0, 0x80]).is_err());
+        assert_eq!(decode_modified_utf8(&[0xC0, 0x80]).as_deref(), Some("\0"));
+
+        // ASCII, a NUL in the middle, then a three-byte BMP character (가).
+        assert_eq!(
+            decode_modified_utf8(&[b'A', 0xC0, 0x80, b'B', 0xEA, 0xB0, 0x80]).as_deref(),
+            Some("A\0B가"),
+        );
+
+        // A supplementary character (U+1F600) as a surrogate pair, each
+        // surrogate in the three-byte form: U+D83D then U+DE00.
+        assert_eq!(decode_modified_utf8(&[0xED, 0xA0, 0xBD, 0xED, 0xB8, 0x80]).as_deref(), Some("\u{1F600}"),);
+
+        // A truncated multi-byte sequence is rejected rather than panicking.
+        assert_eq!(decode_modified_utf8(&[0xC0]), None);
     }
 }
